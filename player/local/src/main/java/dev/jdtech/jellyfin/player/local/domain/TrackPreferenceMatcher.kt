@@ -1,12 +1,15 @@
 package dev.jdtech.jellyfin.player.local.domain
 
 import dev.jdtech.jellyfin.player.core.domain.models.PreferenceTrack
+import dev.jdtech.jellyfin.models.languageTagsMatch
 
 data class PlayerTrackDescriptor(
     val title: String?,
     val language: String?,
     val isForced: Boolean,
     val isExternal: Boolean,
+    val codec: String? = null,
+    val channelCount: Int? = null,
 )
 
 /** Matches Jellyfin track metadata to player tracks without comparing unrelated numeric ids. */
@@ -83,14 +86,16 @@ object TrackPreferenceMatcher {
         if (target.isExternal == candidate.isExternal) score += 4
         if (languageMatches(target.language, candidate.language)) score += 20
         if (titleMatches(target.title, candidate.title)) score += 40
+        if (valueMatches(target.codec, candidate.codec)) score += 16
+        if (target.channelCount != null && target.channelCount == candidate.channelCount) score += 12
         return score
     }
 
-    private fun languageMatches(first: String?, second: String?): Boolean {
-        val a = normalizeLanguage(first)
-        val b = normalizeLanguage(second)
-        return a != null && b != null && a == b
-    }
+    private fun valueMatches(first: String?, second: String?): Boolean =
+        !first.isNullOrBlank() && !second.isNullOrBlank() && first.equals(second, ignoreCase = true)
+
+    private fun languageMatches(first: String?, second: String?): Boolean =
+        languageTagsMatch(first, second)
 
     private fun titleMatches(first: String?, second: String?): Boolean {
         val a = normalizeTitle(first)
@@ -98,11 +103,6 @@ object TrackPreferenceMatcher {
         if (a == null || b == null) return false
         return a == b || a.contains(b) || b.contains(a)
     }
-
-    private fun normalizeLanguage(value: String?): String? = value
-        ?.trim()
-        ?.lowercase()
-        ?.takeIf { it.isNotEmpty() && it != "und" }
 
     private fun normalizeTitle(value: String?): String? = value
         ?.trim()

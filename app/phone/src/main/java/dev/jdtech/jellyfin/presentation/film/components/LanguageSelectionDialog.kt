@@ -27,6 +27,8 @@ import androidx.compose.ui.unit.dp
 import dev.jdtech.jellyfin.core.R as CoreR
 import dev.jdtech.jellyfin.models.FindroidMediaStream
 import dev.jdtech.jellyfin.models.ItemPreferenceDto
+import dev.jdtech.jellyfin.models.compactTrackDisplayName
+import dev.jdtech.jellyfin.models.compactSubtitleDisplayName
 import dev.jdtech.jellyfin.presentation.theme.spacings
 
 @Composable
@@ -77,7 +79,7 @@ fun LanguageSelectionDialog(
                         selectedAudioLanguage == stream.language && (selectedAudioTitle == streamTitle || selectedAudioTitle == stream.title || (selectedAudioTitle.isNullOrBlank() && streamTitle.isBlank()))
                     }
                     LanguageOption(
-                        title = streamTitle.ifBlank { stream.language },
+                        title = compactTrackDisplayName(stream.language, streamTitle).orEmpty(),
                         isSelected = isSelected,
                         onClick = {
                             selectedAudioIndex = stream.index
@@ -129,10 +131,12 @@ fun LanguageSelectionDialog(
                                 (selectedSubtitleIsForced == null || stream.isForced == selectedSubtitleIsForced)
                     }
                     val forcedTag = stringResource(CoreR.string.forced_tag)
-                    val baseTitle = streamTitle.ifBlank { stream.language }
-                    val displayTitle = if (stream.isForced && !baseTitle.contains(forcedTag, ignoreCase = true)) {
-                        "$baseTitle ($forcedTag)"
-                    } else baseTitle
+                    val displayTitle = compactSubtitleDisplayName(
+                        languageTag = stream.language,
+                        title = streamTitle,
+                        isForced = stream.isForced,
+                        forcedLabel = forcedTag,
+                    ).orEmpty()
 
                     LanguageOption(
                         title = displayTitle,

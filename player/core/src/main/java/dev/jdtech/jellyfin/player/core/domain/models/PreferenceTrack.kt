@@ -11,4 +11,6 @@ data class PreferenceTrack(
     val language: String?,
     val isForced: Boolean = false,
     val isExternal: Boolean = false,
+    val codec: String? = null,
+    val channelCount: Int? = null,
 ) : Parcelable

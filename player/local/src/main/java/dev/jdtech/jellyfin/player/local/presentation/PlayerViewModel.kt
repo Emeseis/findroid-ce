@@ -29,6 +29,7 @@ import dev.jdtech.jellyfin.models.MediaSegmentAction
 import dev.jdtech.jellyfin.player.core.domain.models.PlayerChapter
 import dev.jdtech.jellyfin.player.core.domain.models.PlayerItem
 import dev.jdtech.jellyfin.player.core.domain.models.PreferenceTrack
+import dev.jdtech.jellyfin.models.languageTagsMatch
 import dev.jdtech.jellyfin.player.core.domain.models.Trickplay
 import dev.jdtech.jellyfin.player.local.R
 import dev.jdtech.jellyfin.player.local.domain.PlaylistManager
@@ -780,7 +781,7 @@ constructor(
         if (targetLang != null && targetTitle != null) {
             val match = audioGroups.find { group ->
                 val format = group.mediaTrackGroup.getFormat(0)
-                format.language == targetLang && format.label?.equals(targetTitle, ignoreCase = true) == true
+                languageTagsMatch(format.language, targetLang) && format.label?.equals(targetTitle, ignoreCase = true) == true
             }
             if (match != null) return match
         }
@@ -789,7 +790,7 @@ constructor(
         if (targetLang != null) {
             val match = audioGroups.find { group ->
                 val format = group.mediaTrackGroup.getFormat(0)
-                format.language == targetLang
+                languageTagsMatch(format.language, targetLang)
             }
             if (match != null) return match
         }
@@ -845,7 +846,7 @@ constructor(
         if (targetLang != null && targetTitle != null && targetForced != null) {
             val match = textGroups.find { group ->
                 val format = group.mediaTrackGroup.getFormat(0)
-                format.language == targetLang &&
+                languageTagsMatch(format.language, targetLang) &&
                         format.label?.equals(targetTitle, ignoreCase = true) == true &&
                         isFormatForced(format) == targetForced
             }
@@ -856,7 +857,7 @@ constructor(
         if (targetLang != null && targetForced != null) {
             val match = textGroups.find { group ->
                 val format = group.mediaTrackGroup.getFormat(0)
-                format.language == targetLang && isFormatForced(format) == targetForced
+                languageTagsMatch(format.language, targetLang) && isFormatForced(format) == targetForced
             }
             if (match != null) return match
         }
@@ -865,7 +866,7 @@ constructor(
         if (targetLang != null && targetTitle != null) {
             val match = textGroups.find { group ->
                 val format = group.mediaTrackGroup.getFormat(0)
-                format.language == targetLang && format.label?.equals(targetTitle, ignoreCase = true) == true
+                languageTagsMatch(format.language, targetLang) && format.label?.equals(targetTitle, ignoreCase = true) == true
             }
             if (match != null) return match
         }
@@ -874,7 +875,7 @@ constructor(
         if (targetLang != null) {
             val match = textGroups.find { group ->
                 val format = group.mediaTrackGroup.getFormat(0)
-                format.language == targetLang
+                languageTagsMatch(format.language, targetLang)
             }
             if (match != null) return match
         }
@@ -908,6 +909,8 @@ constructor(
             isForced = (format.selectionFlags and C.SELECTION_FLAG_FORCED) != 0 ||
                 format.label?.contains("forced", ignoreCase = true) == true,
             isExternal = (format.roleFlags and C.ROLE_FLAG_AUXILIARY) != 0,
+            codec = format.codecs,
+            channelCount = format.channelCount.takeIf { it != Format.NO_VALUE },
         )
     }
 

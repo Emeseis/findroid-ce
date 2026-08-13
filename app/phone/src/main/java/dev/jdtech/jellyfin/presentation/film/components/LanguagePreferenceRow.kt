@@ -19,6 +19,8 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import dev.jdtech.jellyfin.core.R as CoreR
 import dev.jdtech.jellyfin.models.ItemPreferenceDto
+import dev.jdtech.jellyfin.models.compactTrackDisplayName
+import dev.jdtech.jellyfin.models.compactSubtitleDisplayName
 import dev.jdtech.jellyfin.models.localizedLanguageName
 import dev.jdtech.jellyfin.presentation.theme.spacings
 
@@ -28,21 +30,11 @@ fun LanguagePreferenceRow(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val audioLanguageDisplay = localizedLanguageName(preference?.audioLanguage)
     val subtitleLanguageDisplay = localizedLanguageName(preference?.subtitleLanguage)
 
-    val audioText = if (preference != null) {
-        val language = audioLanguageDisplay
-        val title = preference.audioTitle
-        when {
-            title != null && language != null -> stringResource(CoreR.string.track_with_title, language, title)
-            title != null -> title
-            language != null -> language
-            else -> stringResource(CoreR.string.server_default)
-        }
-    } else {
-        stringResource(CoreR.string.server_default)
-    }
+    val audioText = preference?.let {
+        compactTrackDisplayName(it.audioLanguage, it.audioTitle)
+    } ?: stringResource(CoreR.string.server_default)
 
     val subtitleText = if (preference != null) {
         val language = preference.subtitleLanguage
@@ -50,12 +42,12 @@ fun LanguagePreferenceRow(
         val isForced = preference.subtitleIsForced
         when {
             language == "none" -> stringResource(CoreR.string.none)
-            title != null && subtitleLanguageDisplay != null -> {
-                val base = stringResource(CoreR.string.track_with_title, subtitleLanguageDisplay, title)
-                if (isForced == true) "$base (${stringResource(CoreR.string.forced_tag)})" else base
-            }
-            title != null -> if (isForced == true) "$title (${stringResource(CoreR.string.forced_tag)})" else title
-            subtitleLanguageDisplay != null -> if (isForced == true) "$subtitleLanguageDisplay (${stringResource(CoreR.string.forced_tag)})" else subtitleLanguageDisplay
+            title != null || subtitleLanguageDisplay != null -> compactSubtitleDisplayName(
+                languageTag = language,
+                title = title,
+                isForced = isForced == true,
+                forcedLabel = stringResource(CoreR.string.forced_tag),
+            ).orEmpty()
             else -> stringResource(CoreR.string.server_default)
         }
     } else {

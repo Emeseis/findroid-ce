@@ -282,6 +282,8 @@ class PlaylistManager @Inject internal constructor(private val repository: Jelly
                             ?: mediaStream.title.takeIf { it.isNotBlank() },
                         language = mediaStream.language.takeIf { it.isNotBlank() },
                         isExternal = mediaStream.isExternal,
+                        codec = mediaStream.codec.takeIf { it.isNotBlank() },
+                        channelCount = mediaStream.channelLayout.toChannelCount(),
                     )
                 },
             subtitlePreferenceTracks = mediaSource.mediaStreams
@@ -294,12 +296,26 @@ class PlaylistManager @Inject internal constructor(private val repository: Jelly
                         language = mediaStream.language.takeIf { it.isNotBlank() },
                         isForced = mediaStream.isForced,
                         isExternal = mediaStream.isExternal,
+                        codec = mediaStream.codec.takeIf { it.isNotBlank() },
                     )
                 },
             externalSubtitles = externalSubtitles,
             chapters = chapters.toPlayerChapters(),
             trickplayInfo = trickplayInfo,
         )
+    }
+
+    private fun String?.toChannelCount(): Int? = when (this?.lowercase()) {
+        "mono" -> 1
+        "stereo" -> 2
+        "2.1" -> 3
+        "3.0" -> 3
+        "4.0", "quad" -> 4
+        "5.0" -> 5
+        "5.1" -> 6
+        "6.1" -> 7
+        "7.1" -> 8
+        else -> null
     }
 
     private fun List<FindroidChapter>.toPlayerChapters(): List<PlayerChapter> {
