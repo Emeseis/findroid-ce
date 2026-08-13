@@ -10,6 +10,7 @@ import dev.jdtech.jellyfin.models.FindroidSeason
 import dev.jdtech.jellyfin.models.FindroidSegment
 import dev.jdtech.jellyfin.models.FindroidShow
 import dev.jdtech.jellyfin.models.FindroidSource
+import dev.jdtech.jellyfin.models.ItemPreferenceDto
 import dev.jdtech.jellyfin.models.SortBy
 import dev.jdtech.jellyfin.models.SortOrder
 import java.util.UUID
@@ -114,6 +115,10 @@ interface JellyfinRepository {
     suspend fun getSegments(itemId: UUID): List<FindroidSegment>
 
     suspend fun getTrickplayData(itemId: UUID, width: Int, index: Int): ByteArray?
+
+    suspend fun getItemPreference(id: UUID): ItemPreferenceDto?
+
+    suspend fun insertItemPreference(preference: ItemPreferenceDto)
 
     suspend fun postCapabilities()
 

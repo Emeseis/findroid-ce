@@ -1,5 +1,6 @@
 package dev.jdtech.jellyfin.film.presentation.movie
 
+import dev.jdtech.jellyfin.models.ItemPreferenceDto
 import java.util.UUID
 
 sealed interface MovieAction {
@@ -20,4 +21,6 @@ sealed interface MovieAction {
     data object OnHomeClick : MovieAction
 
     data class NavigateToPerson(val personId: UUID) : MovieAction
+
+    data class UpdatePreference(val preference: ItemPreferenceDto) : MovieAction
 }

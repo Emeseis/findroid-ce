@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.jellyfin.sdk.model.api.MediaStreamType
 import org.jellyfin.sdk.model.api.PersonKind
 import timber.log.Timber
 
@@ -56,7 +57,8 @@ constructor(
                 val writers = getWriters(show)
                 val seasonDownloadInfo = mutableMapOf<UUID, SeasonDownloadInfo>()
                 var hasDownloads = false
-                coroutineScope {
+                var firstEpisode: FindroidEpisode? = null
+                val allEpisodes = coroutineScope {
                     seasons.map { season ->
                         async {
                             val episodes =
@@ -68,7 +70,10 @@ constructor(
                             season.id to episodes
                         }
                     }.awaitAll()
-                }.forEach { (seasonId, episodes) ->
+                }
+
+                allEpisodes.forEach { (seasonId, episodes) ->
+                    if (firstEpisode == null) firstEpisode = episodes.firstOrNull()
                     val downloadedCount = episodes.count { it.isDownloaded() }
                     if (downloadedCount > 0) hasDownloads = true
                     seasonDownloadInfo[seasonId] =
@@ -77,6 +82,20 @@ constructor(
                             totalCount = episodes.size,
                         )
                 }
+
+                val itemPreference = repository.getItemPreference(showId)
+                val referenceEpisode = allEpisodes.flatMap { it.second }
+                    .find { it.id == nextUp?.id }
+                    ?: firstEpisode
+                val referenceEpisodeWithSources = referenceEpisode?.let { repository.getEpisode(it.id) }
+                val referenceStreams = referenceEpisodeWithSources
+                    ?.sources
+                    ?.firstOrNull()
+                    ?.mediaStreams
+                    .orEmpty()
+                val availableAudio = referenceStreams.filter { it.type == MediaStreamType.AUDIO }
+                val availableSubtitles = referenceStreams.filter { it.type == MediaStreamType.SUBTITLE }
+
                 _state.emit(
                     _state.value.copy(
                         show = show,
@@ -87,10 +106,26 @@ constructor(
                         director = director,
                         writers = writers,
                         hasDownloads = hasDownloads,
+                        itemPreference = itemPreference,
+                        availableAudioStreams = availableAudio,
+                        availableSubtitleStreams = availableSubtitles,
                     )
                 )
             } catch (e: Exception) {
                 _state.emit(_state.value.copy(error = e))
+            }
+        }
+    }
+
+    /** Refreshes local player preferences without reloading seasons and episodes. */
+    fun refreshItemPreference() {
+        if (!::showId.isInitialized) return
+        viewModelScope.launch {
+            try {
+                val itemPreference = repository.getItemPreference(showId)
+                _state.emit(_state.value.copy(itemPreference = itemPreference))
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to refresh show language preference")
             }
         }
     }
@@ -207,6 +242,16 @@ constructor(
                         Timber.e(e, "Failed to unmark as favorite")
                     }
                     loadShow(showId)
+                }
+            }
+            is ShowAction.UpdatePreference -> {
+                viewModelScope.launch {
+                    try {
+                        repository.insertItemPreference(action.preference)
+                        _state.emit(_state.value.copy(itemPreference = action.preference))
+                    } catch (e: Exception) {
+                        Timber.e(e, "Failed to update preference")
+                    }
                 }
             }
             else -> Unit

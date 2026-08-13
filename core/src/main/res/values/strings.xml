@@ -160,4 +160,10 @@
         <item quantity="one">Downloading %d item</item>
         <item quantity="other">Downloading %d items</item>
     </plurals>
+    <string name="language_preference">Language Preference</string>
+    <string name="audio_language">Audio: %s</string>
+    <string name="subtitle_language">Subtitle: %s</string>
+    <string name="server_default">Server Default</string>
+    <string name="forced_tag">Forced</string>
+    <string name="track_with_title">%1$s — %2$s</string>
 </resources>

@@ -1,5 +1,6 @@
 package dev.jdtech.jellyfin.models
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -23,6 +24,9 @@ data class FindroidMediaStreamDto(
     val width: Int?,
     val videoDoViTitle: String?,
     val downloadId: Long? = null,
+    val index: Int? = null,
+    @ColumnInfo(defaultValue = "0") val isForced: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val isDefault: Boolean = false,
 )
 
 fun FindroidMediaStream.toFindroidMediaStreamDto(
@@ -45,5 +49,8 @@ fun FindroidMediaStream.toFindroidMediaStreamDto(
         height = height,
         width = width,
         videoDoViTitle = videoDoViTitle,
+        index = index,
+        isForced = isForced,
+        isDefault = isDefault,
     )
 }

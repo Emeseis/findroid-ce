@@ -9,25 +9,32 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.Tracks
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.jdtech.jellyfin.models.FindroidEpisode
 import dev.jdtech.jellyfin.models.FindroidSegment
 import dev.jdtech.jellyfin.models.FindroidSegmentType
+import dev.jdtech.jellyfin.models.ItemPreferenceDto
 import dev.jdtech.jellyfin.models.MediaSegmentAction
 import dev.jdtech.jellyfin.player.core.domain.models.PlayerChapter
 import dev.jdtech.jellyfin.player.core.domain.models.PlayerItem
+import dev.jdtech.jellyfin.player.core.domain.models.PreferenceTrack
 import dev.jdtech.jellyfin.player.core.domain.models.Trickplay
 import dev.jdtech.jellyfin.player.local.R
 import dev.jdtech.jellyfin.player.local.domain.PlaylistManager
+import dev.jdtech.jellyfin.player.local.domain.PlayerTrackDescriptor
 import dev.jdtech.jellyfin.player.local.domain.StillWatchingTracker
+import dev.jdtech.jellyfin.player.local.domain.TrackPreferenceMatcher
 import dev.jdtech.jellyfin.player.local.domain.TrickplayLoader
 import dev.jdtech.jellyfin.player.local.mpv.MPVPlayer
 import dev.jdtech.jellyfin.repository.JellyfinRepository
@@ -40,6 +47,7 @@ import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -99,6 +107,8 @@ constructor(
     )
 
     private var items: MutableList<PlayerItem> = mutableListOf()
+    private var lastAppliedPreferenceMediaId: String? = null
+    private var lastPreferenceWriteJob: Job? = null
 
     private val trackSelector = DefaultTrackSelector(application)
     var playWhenReady = true
@@ -295,6 +305,22 @@ constructor(
                     playbackPosition
                 }
 
+            startItem.groupingId?.let { groupingId ->
+                repository.getItemPreference(groupingId)?.let { preference ->
+                    val parametersBuilder = player.trackSelectionParameters.buildUpon()
+                    preference.audioLanguage?.let { parametersBuilder.setPreferredAudioLanguage(it) }
+                    if (preference.subtitleLanguage == "none") {
+                        parametersBuilder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                    } else {
+                        preference.subtitleLanguage?.let {
+                            parametersBuilder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                            parametersBuilder.setPreferredTextLanguage(it)
+                        }
+                    }
+                    player.trackSelectionParameters = parametersBuilder.build()
+                }
+            }
+
             player.setMediaItems(mediaItems, 0, startPosition)
             player.prepare()
             player.play()
@@ -305,12 +331,21 @@ constructor(
         val streamUrl = mediaSourceUri
         val mediaSubtitles =
             externalSubtitles.map { externalSubtitle ->
+                var selectionFlags = 0
+                if (externalSubtitle.isForced) {
+                    selectionFlags = selectionFlags or C.SELECTION_FLAG_FORCED
+                }
+                if (externalSubtitle.isDefault) {
+                    selectionFlags = selectionFlags or C.SELECTION_FLAG_DEFAULT
+                }
                 MediaItem.SubtitleConfiguration.Builder(externalSubtitle.uri)
                     .setLabel(
                         externalSubtitle.title.ifBlank { application.getString(R.string.external) }
                     )
                     .setMimeType(externalSubtitle.mimeType)
                     .setLanguage(externalSubtitle.language)
+                    .setSelectionFlags(selectionFlags)
+                    .setRoleFlags(C.ROLE_FLAG_AUXILIARY)
                     .build()
             }
 
@@ -489,6 +524,7 @@ constructor(
 
     override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
         Timber.d("Playing MediaItem: ${mediaItem?.mediaId}")
+        lastAppliedPreferenceMediaId = null
         savedStateHandle["mediaItemIndex"] = player.currentMediaItemIndex
         viewModelScope.launch {
             try {
@@ -681,6 +717,8 @@ constructor(
 
     fun switchToTrack(trackType: @C.TrackType Int, index: Int) {
         markUserInteraction()
+        lastAppliedPreferenceMediaId = player.currentMediaItem?.mediaId
+        saveTrackPreference(trackType, index)
         // Index -1 equals disable track
         if (index == -1) {
             player.trackSelectionParameters =
@@ -711,6 +749,322 @@ constructor(
         markUserInteraction()
         player.setPlaybackSpeed(speed)
         playbackSpeed = speed
+    }
+
+    private fun findBestAudioTrackMatch(
+        audioGroups: List<Tracks.Group>,
+        canonicalTracks: List<PreferenceTrack>,
+        preference: ItemPreferenceDto,
+    ): Tracks.Group? {
+        if (preference.audioLanguage == null && preference.audioTitle == null) return null
+
+        val canonicalTrack = TrackPreferenceMatcher.findCanonicalTrack(
+            tracks = canonicalTracks,
+            streamIndex = preference.audioIndex,
+            language = preference.audioLanguage,
+            title = preference.audioTitle,
+            isForced = null,
+        )
+        if (canonicalTrack != null) {
+            val playerIndex = TrackPreferenceMatcher.findPlayerTrackIndex(
+                target = canonicalTrack,
+                tracks = audioGroups.map { it.toPlayerTrackDescriptor() },
+            )
+            if (playerIndex != null) return audioGroups[playerIndex]
+        }
+
+        val targetLang = preference.audioLanguage?.takeIf { it.isNotBlank() }
+        val targetTitle = preference.audioTitle?.takeIf { it.isNotBlank() }
+
+        // Priority 1: Language + Title
+        if (targetLang != null && targetTitle != null) {
+            val match = audioGroups.find { group ->
+                val format = group.mediaTrackGroup.getFormat(0)
+                format.language == targetLang && format.label?.equals(targetTitle, ignoreCase = true) == true
+            }
+            if (match != null) return match
+        }
+
+        // Priority 2: Language only
+        if (targetLang != null) {
+            val match = audioGroups.find { group ->
+                val format = group.mediaTrackGroup.getFormat(0)
+                format.language == targetLang
+            }
+            if (match != null) return match
+        }
+
+        // Priority 3: Title only
+        if (targetTitle != null) {
+            val match = audioGroups.find { group ->
+                val format = group.mediaTrackGroup.getFormat(0)
+                format.label?.equals(targetTitle, ignoreCase = true) == true
+            }
+            if (match != null) return match
+        }
+
+        return null
+    }
+
+    private fun findBestSubtitleTrackMatch(
+        textGroups: List<Tracks.Group>,
+        canonicalTracks: List<PreferenceTrack>,
+        preference: ItemPreferenceDto,
+        isEpisode: Boolean,
+    ): Tracks.Group? {
+        if (preference.subtitleLanguage == "none" ||
+            (preference.subtitleLanguage == null && preference.subtitleTitle == null)
+        ) {
+            return null
+        }
+
+        val targetLang = preference.subtitleLanguage?.takeIf { it.isNotBlank() }
+        val targetTitle = preference.subtitleTitle?.takeIf { it.isNotBlank() }
+        val targetForced = preference.subtitleIsForced
+        val canonicalTrack = TrackPreferenceMatcher.findCanonicalTrack(
+            tracks = canonicalTracks,
+            streamIndex = if (isEpisode) null else preference.subtitleIndex,
+            language = targetLang,
+            title = targetTitle,
+            isForced = targetForced,
+        )
+        if (canonicalTrack != null) {
+            val playerIndex = TrackPreferenceMatcher.findPlayerTrackIndex(
+                target = canonicalTrack,
+                tracks = textGroups.map { it.toPlayerTrackDescriptor() },
+            )
+            if (playerIndex != null) return textGroups[playerIndex]
+        }
+
+        fun isFormatForced(format: Format): Boolean {
+            return (format.selectionFlags and C.SELECTION_FLAG_FORCED) != 0 ||
+                    (format.label?.contains("forced", ignoreCase = true) == true)
+        }
+
+        // Priority 1: Language + Title + Forced
+        if (targetLang != null && targetTitle != null && targetForced != null) {
+            val match = textGroups.find { group ->
+                val format = group.mediaTrackGroup.getFormat(0)
+                format.language == targetLang &&
+                        format.label?.equals(targetTitle, ignoreCase = true) == true &&
+                        isFormatForced(format) == targetForced
+            }
+            if (match != null) return match
+        }
+
+        // Priority 2: Language + Forced
+        if (targetLang != null && targetForced != null) {
+            val match = textGroups.find { group ->
+                val format = group.mediaTrackGroup.getFormat(0)
+                format.language == targetLang && isFormatForced(format) == targetForced
+            }
+            if (match != null) return match
+        }
+
+        // Priority 3: Language + Title
+        if (targetLang != null && targetTitle != null) {
+            val match = textGroups.find { group ->
+                val format = group.mediaTrackGroup.getFormat(0)
+                format.language == targetLang && format.label?.equals(targetTitle, ignoreCase = true) == true
+            }
+            if (match != null) return match
+        }
+
+        // Priority 4: Language only
+        if (targetLang != null) {
+            val match = textGroups.find { group ->
+                val format = group.mediaTrackGroup.getFormat(0)
+                format.language == targetLang
+            }
+            if (match != null) return match
+        }
+
+        // Priority 4.5: Title + Forced
+        if (targetTitle != null && targetForced != null) {
+            val match = textGroups.find { group ->
+                val format = group.mediaTrackGroup.getFormat(0)
+                format.label?.equals(targetTitle, ignoreCase = true) == true && isFormatForced(format) == targetForced
+            }
+            if (match != null) return match
+        }
+
+        // Priority 5: Title only
+        if (targetTitle != null) {
+            val match = textGroups.find { group ->
+                val format = group.mediaTrackGroup.getFormat(0)
+                format.label?.equals(targetTitle, ignoreCase = true) == true
+            }
+            if (match != null) return match
+        }
+
+        return null
+    }
+
+    private fun Tracks.Group.toPlayerTrackDescriptor(): PlayerTrackDescriptor {
+        val format = mediaTrackGroup.getFormat(0)
+        return PlayerTrackDescriptor(
+            title = format.label,
+            language = format.language,
+            isForced = (format.selectionFlags and C.SELECTION_FLAG_FORCED) != 0 ||
+                format.label?.contains("forced", ignoreCase = true) == true,
+            isExternal = (format.roleFlags and C.ROLE_FLAG_AUXILIARY) != 0,
+        )
+    }
+
+    override fun onTracksChanged(tracks: Tracks) {
+        super.onTracksChanged(tracks)
+        viewModelScope.launch {
+            val mediaId = player.currentMediaItem?.mediaId ?: return@launch
+            if (lastAppliedPreferenceMediaId == mediaId) return@launch
+
+            val itemId = try { UUID.fromString(mediaId) } catch (e: Exception) { return@launch }
+            val currentItem = items.find { it.itemId == itemId }
+            val groupingId = currentItem?.groupingId ?: getGroupingId(itemId)
+            val isEpisode = currentItem?.isEpisode ?: (groupingId != itemId)
+            val preference = repository.getItemPreference(groupingId) ?: run {
+                lastAppliedPreferenceMediaId = mediaId
+                return@launch
+            }
+
+            val parametersBuilder = player.trackSelectionParameters.buildUpon()
+            var changed = false
+            var preferenceResolved = true
+
+            // Audio matching
+            val audioGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO && it.isSupported }
+            val bestAudio = findBestAudioTrackMatch(
+                audioGroups = audioGroups,
+                canonicalTracks = currentItem?.audioPreferenceTracks.orEmpty(),
+                preference = preference,
+            )
+            if (bestAudio != null && !bestAudio.isSelected) {
+                parametersBuilder.setOverrideForType(TrackSelectionOverride(bestAudio.mediaTrackGroup, 0))
+                changed = true
+            }
+
+            // Subtitle matching
+            if (preference.subtitleLanguage == "none") {
+                if (!player.trackSelectionParameters.disabledTrackTypes.contains(C.TRACK_TYPE_TEXT)) {
+                    parametersBuilder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                    changed = true
+                }
+            } else if (preference.subtitleLanguage != null || preference.subtitleTitle != null) {
+                val textGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT && it.isSupported }
+                val bestSubtitle = findBestSubtitleTrackMatch(
+                    textGroups = textGroups,
+                    canonicalTracks = currentItem?.subtitlePreferenceTracks.orEmpty(),
+                    preference = preference,
+                    isEpisode = isEpisode,
+                )
+                if (bestSubtitle == null) {
+                    // External subtitles are added asynchronously by MPV. Keep listening for
+                    // track changes until the requested track is actually available.
+                    preferenceResolved = false
+                } else if (!bestSubtitle.isSelected) {
+                    parametersBuilder.setOverrideForType(TrackSelectionOverride(bestSubtitle.mediaTrackGroup, 0))
+                    parametersBuilder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                    changed = true
+                }
+            }
+
+            if (preferenceResolved) {
+                lastAppliedPreferenceMediaId = mediaId
+            }
+            if (changed) {
+                Timber.d("Applying track overrides for groupingId=$groupingId (isEpisode=$isEpisode)")
+                player.trackSelectionParameters = parametersBuilder.build()
+            }
+        }
+    }
+
+    private fun saveTrackPreference(trackType: @C.TrackType Int, index: Int) {
+        val previousWrite = lastPreferenceWriteJob
+        lastPreferenceWriteJob = viewModelScope.launch(NonCancellable) {
+            // Preserve selection order and finish the short local write even if the player closes.
+            previousWrite?.join()
+            val mediaId = player.currentMediaItem?.mediaId ?: return@launch
+            val itemId = UUID.fromString(mediaId)
+            val currentItem = items.find { it.itemId == itemId }
+            val groupingId = currentItem?.groupingId ?: getGroupingId(itemId)
+            val isEpisode = currentItem?.isEpisode ?: (groupingId != itemId)
+
+            var preference = repository.getItemPreference(groupingId) ?: ItemPreferenceDto(id = groupingId)
+
+            if (trackType == C.TRACK_TYPE_AUDIO) {
+                if (index == -1) {
+                    preference = preference.copy(audioLanguage = null, audioTitle = null, audioIndex = null)
+                } else {
+                    val groups = player.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO && it.isSupported }
+                    val group = groups.getOrNull(index)
+                    val format = group?.mediaTrackGroup?.getFormat(0)
+                    val canonicalTrack = group?.let {
+                        TrackPreferenceMatcher.findCanonicalTrackForPlayer(
+                            playerTrack = it.toPlayerTrackDescriptor(),
+                            tracks = currentItem?.audioPreferenceTracks.orEmpty(),
+                        )
+                    }
+                    preference = preference.copy(
+                        audioLanguage = canonicalTrack?.language
+                            ?: format?.language?.takeIf { it.isNotBlank() }
+                            ?: "und",
+                        audioTitle = canonicalTrack?.title
+                            ?: format?.label?.takeIf { it.isNotBlank() },
+                        audioIndex = if (isEpisode) null else canonicalTrack?.index
+                    )
+                }
+            } else if (trackType == C.TRACK_TYPE_TEXT) {
+                if (index == -1) {
+                    preference = preference.copy(
+                        subtitleLanguage = "none",
+                        subtitleTitle = null,
+                        subtitleIndex = null,
+                        subtitleIsForced = null
+                    )
+                } else {
+                    val groups = player.currentTracks.groups.filter { it.type == C.TRACK_TYPE_TEXT && it.isSupported }
+                    val group = groups.getOrNull(index)
+                    val format = group?.mediaTrackGroup?.getFormat(0)
+                    val canonicalTrack = group?.let {
+                        TrackPreferenceMatcher.findCanonicalTrackForPlayer(
+                            playerTrack = it.toPlayerTrackDescriptor(),
+                            tracks = currentItem?.subtitlePreferenceTracks.orEmpty(),
+                        )
+                    }
+                    val isForced = canonicalTrack?.isForced ?: format?.let {
+                        (it.selectionFlags and C.SELECTION_FLAG_FORCED) != 0 ||
+                                (it.label?.contains("forced", ignoreCase = true) == true)
+                    } ?: false
+
+                    preference = preference.copy(
+                        subtitleLanguage = canonicalTrack?.language
+                            ?: format?.language?.takeIf { it.isNotBlank() }
+                            ?: "und",
+                        subtitleTitle = canonicalTrack?.title
+                            ?: format?.label?.takeIf { it.isNotBlank() },
+                        subtitleIndex = if (isEpisode) null else canonicalTrack?.index,
+                        subtitleIsForced = isForced
+                    )
+                }
+            }
+            repository.insertItemPreference(preference)
+        }
+    }
+
+    suspend fun awaitPendingPreferenceWrites() {
+        lastPreferenceWriteJob?.join()
+    }
+
+    private suspend fun getGroupingId(itemId: UUID): UUID {
+        return try {
+            val item = repository.getItem(itemId)
+            if (item is FindroidEpisode) {
+                item.seriesId
+            } else {
+                itemId
+            }
+        } catch (e: Exception) {
+            itemId
+        }
     }
 
     private suspend fun getSegments(itemId: UUID) {

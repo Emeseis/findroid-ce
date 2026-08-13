@@ -25,6 +25,7 @@ import android.widget.ImageView
 import android.widget.Space
 import android.widget.TextView
 import androidx.activity.viewModels
+import androidx.activity.addCallback
 import androidx.core.view.isVisible
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -101,6 +102,7 @@ class PlayerActivity : BasePlayerActivity() {
 
         binding = ActivityPlayerBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        onBackPressedDispatcher.addCallback(this) { finishPlayback() }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         binding.playerView.player = viewModel.player
@@ -403,7 +405,10 @@ class PlayerActivity : BasePlayerActivity() {
             Timber.e(e)
         }
         handler.removeCallbacks(skipButtonTimeout)
-        finish()
+        lifecycleScope.launch {
+            viewModel.awaitPendingPreferenceWrites()
+            finish()
+        }
     }
 
     private fun pipParams(

@@ -15,6 +15,7 @@ import dev.jdtech.jellyfin.models.FindroidShowDto
 import dev.jdtech.jellyfin.models.FindroidSourceDto
 import dev.jdtech.jellyfin.models.FindroidTrickplayInfoDto
 import dev.jdtech.jellyfin.models.FindroidUserDataDto
+import dev.jdtech.jellyfin.models.ItemPreferenceDto
 import dev.jdtech.jellyfin.models.PendingDownloadDto
 import dev.jdtech.jellyfin.models.Server
 import dev.jdtech.jellyfin.models.ServerAddress
@@ -278,4 +279,10 @@ interface ServerDatabaseDao {
 
     @Query("SELECT * FROM trickplayInfos WHERE sourceId = :sourceId")
     fun getTrickplayInfo(sourceId: String): FindroidTrickplayInfoDto?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    fun insertItemPreference(preference: ItemPreferenceDto)
+
+    @Query("SELECT * FROM item_preferences WHERE userId = :userId AND id = :id")
+    fun getItemPreference(userId: UUID, id: UUID): ItemPreferenceDto?
 }

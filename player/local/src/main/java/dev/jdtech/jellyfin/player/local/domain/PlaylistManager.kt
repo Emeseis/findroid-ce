@@ -11,6 +11,7 @@ import dev.jdtech.jellyfin.models.FindroidSources
 import dev.jdtech.jellyfin.player.core.domain.models.ExternalSubtitle
 import dev.jdtech.jellyfin.player.core.domain.models.PlayerChapter
 import dev.jdtech.jellyfin.player.core.domain.models.PlayerItem
+import dev.jdtech.jellyfin.player.core.domain.models.PreferenceTrack
 import dev.jdtech.jellyfin.player.core.domain.models.TrickplayInfo
 import dev.jdtech.jellyfin.repository.JellyfinRepository
 import java.util.UUID
@@ -221,11 +222,13 @@ class PlaylistManager @Inject internal constructor(private val repository: Jelly
                         !mediaStream.path.isNullOrBlank()
                 }
                 .map { mediaStream ->
+                    val subtitleTitle = mediaStream.displayTitle?.takeIf { it.isNotBlank() }
+                        ?: mediaStream.title
                     ExternalSubtitle(
-                        mediaStream.title,
-                        mediaStream.language,
-                        mediaStream.path!!.toUri(),
-                        when (mediaStream.codec) {
+                        title = subtitleTitle,
+                        language = mediaStream.language,
+                        uri = mediaStream.path!!.toUri(),
+                        mimeType = when (mediaStream.codec) {
                             "subrip" -> MimeTypes.APPLICATION_SUBRIP
                             "webvtt" -> MimeTypes.TEXT_VTT
                             "ass" -> MimeTypes.TEXT_SSA
@@ -237,6 +240,8 @@ class PlaylistManager @Inject internal constructor(private val repository: Jelly
                             "dvbsub" -> MimeTypes.APPLICATION_DVBSUBS
                             else -> MimeTypes.TEXT_UNKNOWN
                         },
+                        isForced = mediaStream.isForced,
+                        isDefault = mediaStream.isDefault,
                     )
                 }
         val trickplayInfo =
@@ -266,6 +271,31 @@ class PlaylistManager @Inject internal constructor(private val repository: Jelly
             parentIndexNumber = if (this is FindroidEpisode) parentIndexNumber else null,
             indexNumber = if (this is FindroidEpisode) indexNumber else null,
             indexNumberEnd = if (this is FindroidEpisode) indexNumberEnd else null,
+            groupingId = if (this is FindroidEpisode) seriesId else id,
+            isEpisode = this is FindroidEpisode,
+            audioPreferenceTracks = mediaSource.mediaStreams
+                .filter { it.type == MediaStreamType.AUDIO }
+                .map { mediaStream ->
+                    PreferenceTrack(
+                        index = mediaStream.index,
+                        title = mediaStream.displayTitle?.takeIf { it.isNotBlank() }
+                            ?: mediaStream.title.takeIf { it.isNotBlank() },
+                        language = mediaStream.language.takeIf { it.isNotBlank() },
+                        isExternal = mediaStream.isExternal,
+                    )
+                },
+            subtitlePreferenceTracks = mediaSource.mediaStreams
+                .filter { it.type == MediaStreamType.SUBTITLE }
+                .map { mediaStream ->
+                    PreferenceTrack(
+                        index = mediaStream.index,
+                        title = mediaStream.displayTitle?.takeIf { it.isNotBlank() }
+                            ?: mediaStream.title.takeIf { it.isNotBlank() },
+                        language = mediaStream.language.takeIf { it.isNotBlank() },
+                        isForced = mediaStream.isForced,
+                        isExternal = mediaStream.isExternal,
+                    )
+                },
             externalSubtitles = externalSubtitles,
             chapters = chapters.toPlayerChapters(),
             trickplayInfo = trickplayInfo,

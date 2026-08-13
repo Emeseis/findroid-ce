@@ -2,6 +2,8 @@ package dev.jdtech.jellyfin.presentation.film
 
 import android.content.Intent
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,6 +24,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -51,6 +56,8 @@ import dev.jdtech.jellyfin.presentation.film.components.InfoText
 import dev.jdtech.jellyfin.presentation.film.components.ItemButtonsBar
 import dev.jdtech.jellyfin.presentation.film.components.ItemHeader
 import dev.jdtech.jellyfin.presentation.film.components.ItemTopBar
+import dev.jdtech.jellyfin.presentation.film.components.LanguagePreferenceRow
+import dev.jdtech.jellyfin.presentation.film.components.LanguageSelectionDialog
 import dev.jdtech.jellyfin.presentation.film.components.OverviewText
 import dev.jdtech.jellyfin.presentation.film.components.VideoMetadataBar
 import dev.jdtech.jellyfin.presentation.theme.FindroidTheme
@@ -77,6 +84,10 @@ fun MovieScreen(
 
     val state by viewModel.state.collectAsStateWithLifecycle()
     val downloaderState by downloaderViewModel.state.collectAsStateWithLifecycle()
+    val playerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult(),
+        onResult = { viewModel.refreshItemPreference() },
+    )
 
     LaunchedEffect(movieId) { viewModel.loadMovie(movieId = movieId) }
 
@@ -112,7 +123,7 @@ fun MovieScreen(
                     intent.putExtra("itemId", movieId.toString())
                     intent.putExtra("itemKind", BaseItemKind.MOVIE.serialName)
                     intent.putExtra("startFromBeginning", action.startFromBeginning)
-                    context.startActivity(intent)
+                    playerLauncher.launch(intent)
                 }
                 is MovieAction.PlayTrailer -> {
                     try {
@@ -146,6 +157,8 @@ private fun MovieScreenLayout(
     val paddingBottom = safePadding.bottom + MaterialTheme.spacings.default
 
     val scrollState = rememberScrollState()
+
+    var languageSelectionDialogOpen by remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         state.movie?.let { movie ->
@@ -266,6 +279,11 @@ private fun MovieScreenLayout(
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Spacer(Modifier.height(MaterialTheme.spacings.small))
+                    LanguagePreferenceRow(
+                        preference = state.itemPreference,
+                        onClick = { languageSelectionDialogOpen = true }
+                    )
+                    Spacer(Modifier.height(MaterialTheme.spacings.small))
                     if (state.displayExtraInfo && state.videoMetadata != null) {
                         ExtraInfoText(videoMetadata = state.videoMetadata!!)
                         Spacer(Modifier.height(MaterialTheme.spacings.medium))
@@ -298,6 +316,21 @@ private fun MovieScreenLayout(
             onBackClick = { onAction(MovieAction.OnBackClick) },
             onHomeClick = { onAction(MovieAction.OnHomeClick) },
         )
+
+        val movie = state.movie
+        if (languageSelectionDialogOpen && movie != null) {
+            LanguageSelectionDialog(
+                availableAudio = state.availableAudioStreams,
+                availableSubtitles = state.availableSubtitleStreams,
+                currentPreference = state.itemPreference,
+                groupingId = movie.id,
+                onConfirm = { preference ->
+                    onAction(MovieAction.UpdatePreference(preference))
+                    languageSelectionDialogOpen = false
+                },
+                onDismiss = { languageSelectionDialogOpen = false }
+            )
+        }
     }
 }
 

@@ -2,8 +2,10 @@ package dev.jdtech.jellyfin.film.presentation.show
 
 import dev.jdtech.jellyfin.models.FindroidEpisode
 import dev.jdtech.jellyfin.models.FindroidItemPerson
+import dev.jdtech.jellyfin.models.FindroidMediaStream
 import dev.jdtech.jellyfin.models.FindroidSeason
 import dev.jdtech.jellyfin.models.FindroidShow
+import dev.jdtech.jellyfin.models.ItemPreferenceDto
 import java.util.UUID
 
 data class SeasonDownloadInfo(
@@ -20,5 +22,8 @@ data class ShowState(
     val director: FindroidItemPerson? = null,
     val writers: List<FindroidItemPerson> = emptyList(),
     val hasDownloads: Boolean = false,
+    val itemPreference: ItemPreferenceDto? = null,
+    val availableAudioStreams: List<FindroidMediaStream> = emptyList(),
+    val availableSubtitleStreams: List<FindroidMediaStream> = emptyList(),
     val error: Exception? = null,
 )

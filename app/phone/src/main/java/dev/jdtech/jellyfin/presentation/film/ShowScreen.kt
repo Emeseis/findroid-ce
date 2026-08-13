@@ -2,6 +2,8 @@ package dev.jdtech.jellyfin.presentation.film
 
 import android.content.Intent
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -61,6 +63,8 @@ import dev.jdtech.jellyfin.presentation.film.components.ItemCard
 import dev.jdtech.jellyfin.presentation.film.components.ItemHeader
 import dev.jdtech.jellyfin.presentation.film.components.ItemPoster
 import dev.jdtech.jellyfin.presentation.film.components.ItemTopBar
+import dev.jdtech.jellyfin.presentation.film.components.LanguagePreferenceRow
+import dev.jdtech.jellyfin.presentation.film.components.LanguageSelectionDialog
 import dev.jdtech.jellyfin.presentation.film.components.OverviewText
 import dev.jdtech.jellyfin.presentation.film.components.SeasonSelectionDialog
 import dev.jdtech.jellyfin.presentation.theme.FindroidTheme
@@ -85,6 +89,10 @@ fun ShowScreen(
     val uriHandler = LocalUriHandler.current
 
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val playerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult(),
+        onResult = { viewModel.refreshItemPreference() },
+    )
 
     LaunchedEffect(showId) { viewModel.loadShow(showId = showId, downloadsOnly = downloadsOnly) }
 
@@ -126,7 +134,7 @@ fun ShowScreen(
                     val intent = Intent(context, PlayerActivity::class.java)
                     intent.putExtra("itemId", showId.toString())
                     intent.putExtra("itemKind", BaseItemKind.SERIES.serialName)
-                    context.startActivity(intent)
+                    playerLauncher.launch(intent)
                 }
                 is ShowAction.PlayTrailer -> {
                     try {
@@ -164,6 +172,7 @@ private fun ShowScreenLayout(
     val scrollState = rememberScrollState()
 
     var seasonSelectionDialogOpen by remember { mutableStateOf(false) }
+    var languageSelectionDialogOpen by remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         state.show?.let { show ->
@@ -280,6 +289,11 @@ private fun ShowScreenLayout(
                         isDownloaded = state.hasDownloads,
                     )
                     Spacer(Modifier.height(MaterialTheme.spacings.small))
+                    LanguagePreferenceRow(
+                        preference = state.itemPreference,
+                        onClick = { languageSelectionDialogOpen = true }
+                    )
+                    Spacer(Modifier.height(MaterialTheme.spacings.small))
                     OverviewText(text = show.overview, maxCollapsedLines = 3)
                     Spacer(Modifier.height(MaterialTheme.spacings.medium))
                     InfoText(
@@ -373,6 +387,22 @@ private fun ShowScreenLayout(
                 },
                 onDismiss = { seasonSelectionDialogOpen = false },
                 seasonDownloadInfo = state.seasonDownloadInfo,
+            )
+        }
+
+        val show = state.show
+        if (languageSelectionDialogOpen && show != null) {
+            LanguageSelectionDialog(
+                availableAudio = state.availableAudioStreams,
+                availableSubtitles = state.availableSubtitleStreams,
+                currentPreference = state.itemPreference,
+                groupingId = show.id,
+                isSeries = true,
+                onConfirm = { preference ->
+                    onAction(ShowAction.UpdatePreference(preference))
+                    languageSelectionDialogOpen = false
+                },
+                onDismiss = { languageSelectionDialogOpen = false }
             )
         }
     }

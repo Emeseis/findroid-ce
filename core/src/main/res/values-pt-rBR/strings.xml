@@ -109,4 +109,10 @@
     <string name="download_downloading">Baixando…</string>
     <string name="download_failed">Falha ao baixar</string>
     <string name="discard">Descartar</string>
+    <string name="language_preference">Preferência de idioma</string>
+    <string name="audio_language">Áudio: %s</string>
+    <string name="subtitle_language">Legenda: %s</string>
+    <string name="server_default">Padrão do servidor</string>
+    <string name="forced_tag">Forçada</string>
+    <string name="track_with_title">%1$s — %2$s</string>
 </resources>

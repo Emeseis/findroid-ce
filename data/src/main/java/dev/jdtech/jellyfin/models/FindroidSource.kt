@@ -54,7 +54,9 @@ suspend fun MediaSourceInfo.toFindroidSource(
         path = path,
         size = size ?: 0,
         mediaStreams =
-            mediaStreams?.map { it.toFindroidMediaStream(jellyfinRepository) } ?: emptyList(),
+            mediaStreams?.map { stream ->
+                stream.toFindroidMediaStream(jellyfinRepository)
+            } ?: emptyList(),
         transcoded = transcoded,
     )
 }

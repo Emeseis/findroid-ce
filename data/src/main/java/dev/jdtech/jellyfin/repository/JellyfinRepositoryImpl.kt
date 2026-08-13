@@ -15,6 +15,7 @@ import dev.jdtech.jellyfin.models.FindroidSeason
 import dev.jdtech.jellyfin.models.FindroidSegment
 import dev.jdtech.jellyfin.models.FindroidShow
 import dev.jdtech.jellyfin.models.FindroidSource
+import dev.jdtech.jellyfin.models.ItemPreferenceDto
 import dev.jdtech.jellyfin.models.SortBy
 import dev.jdtech.jellyfin.models.SortOrder
 import dev.jdtech.jellyfin.models.toFindroidCollection
@@ -431,6 +432,16 @@ class JellyfinRepositoryImpl(
             } catch (_: Exception) {
                 return@withContext null
             }
+        }
+
+    override suspend fun getItemPreference(id: UUID): ItemPreferenceDto? =
+        withContext(Dispatchers.IO) {
+            database.getItemPreference(currentUserId, id)
+        }
+
+    override suspend fun insertItemPreference(preference: ItemPreferenceDto) =
+        withContext(Dispatchers.IO) {
+            database.insertItemPreference(preference.copy(userId = currentUserId))
         }
 
     override suspend fun postCapabilities() {

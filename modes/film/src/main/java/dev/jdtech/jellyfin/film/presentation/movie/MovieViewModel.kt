@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import timber.log.Timber
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.jellyfin.sdk.model.api.MediaStreamType
 import org.jellyfin.sdk.model.api.PersonKind
 
 @HiltViewModel
@@ -41,6 +42,9 @@ constructor(
                 val director = getDirector(movie)
                 val writers = getWriters(movie)
                 val displayExtraInfo = appPreferences.getValue(appPreferences.displayExtraInfo)
+                val itemPreference = repository.getItemPreference(movieId)
+                val availableAudio = movie.sources.firstOrNull()?.mediaStreams?.filter { it.type == MediaStreamType.AUDIO } ?: emptyList()
+                val availableSubtitles = movie.sources.firstOrNull()?.mediaStreams?.filter { it.type == MediaStreamType.SUBTITLE } ?: emptyList()
                 _state.emit(
                     _state.value.copy(
                         movie = movie,
@@ -49,10 +53,26 @@ constructor(
                         director = director,
                         writers = writers,
                         displayExtraInfo = displayExtraInfo,
+                        itemPreference = itemPreference,
+                        availableAudioStreams = availableAudio,
+                        availableSubtitleStreams = availableSubtitles,
                     )
                 )
             } catch (e: Exception) {
                 _state.emit(_state.value.copy(error = e))
+            }
+        }
+    }
+
+    /** Refreshes local player preferences without reloading all movie metadata. */
+    fun refreshItemPreference() {
+        if (!::movieId.isInitialized) return
+        viewModelScope.launch {
+            try {
+                val itemPreference = repository.getItemPreference(movieId)
+                _state.emit(_state.value.copy(itemPreference = itemPreference))
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to refresh movie language preference")
             }
         }
     }
@@ -115,6 +135,16 @@ constructor(
                         Timber.e(e, "Failed to unmark as favorite")
                     }
                     loadMovie(movieId)
+                }
+            }
+            is MovieAction.UpdatePreference -> {
+                viewModelScope.launch {
+                    try {
+                        repository.insertItemPreference(action.preference)
+                        _state.emit(_state.value.copy(itemPreference = action.preference))
+                    } catch (e: Exception) {
+                        Timber.e(e, "Failed to update preference")
+                    }
                 }
             }
             else -> Unit

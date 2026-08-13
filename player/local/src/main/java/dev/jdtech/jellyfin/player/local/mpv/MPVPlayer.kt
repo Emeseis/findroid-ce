@@ -179,11 +179,10 @@ class MPVPlayer(
         // See
         // https://github.com/androidx/media/blob/1.4.0/libraries/common/src/main/java/androidx/media3/common/util/Util.java#L3742
         trackSelectionParameters.preferredAudioLanguages.firstOrNull()?.let {
-            mpvLib.setOptionString("alang", it.split("-").last())
+            mpvLib.setOptionString("alang", it.substringBefore('-'))
         }
         trackSelectionParameters.preferredTextLanguages.firstOrNull()?.let {
-            println(it.split("-").last())
-            mpvLib.setOptionString("slang", it.split("-").last())
+            mpvLib.setOptionString("slang", it.substringBefore('-'))
         }
 
         // Other options
@@ -323,7 +322,9 @@ class MPVPlayer(
         handler.post {
             when (property) {
                 "track-list" -> {
-                    val newTracks = getTracks(value)
+                    val subtitleConfigurations =
+                        currentMediaItem?.localConfiguration?.subtitleConfigurations.orEmpty()
+                    val newTracks = getTracks(value, subtitleConfigurations)
                     currentTracks = newTracks
                     listeners.sendEvent(EVENT_TRACKS_CHANGED) { listener ->
                         listener.onTracksChanged(currentTracks)
@@ -516,7 +517,7 @@ class MPVPlayer(
      * @return true if the track is or was already selected
      */
     private fun selectTrack(trackType: MPVTrackType, id: String) {
-        mpvLib.setPropertyString(trackType.type, id)
+        mpvLib.setPropertyString(trackType.selectionProperty, id)
     }
 
     // Timeline wrapper
@@ -1104,6 +1105,14 @@ class MPVPlayer(
     override fun setTrackSelectionParameters(parameters: TrackSelectionParameters) {
         trackSelectionParameters = parameters
 
+        // Languages
+        parameters.preferredAudioLanguages.firstOrNull()?.let {
+            mpvLib.setOptionString("alang", it.substringBefore('-'))
+        }
+        parameters.preferredTextLanguages.firstOrNull()?.let {
+            mpvLib.setOptionString("slang", it.substringBefore('-'))
+        }
+
         // Disabled track types
         val disabledTrackTypes =
             parameters.disabledTrackTypes.map { MPVTrackType.fromMedia3TrackType(it) }
@@ -1572,17 +1581,42 @@ class MPVPlayer(
             }
         }
 
-        private fun createTracksGroupfromMpvJson(json: JSONObject): Tracks.Group {
+        private fun createTracksGroupfromMpvJson(
+            json: JSONObject,
+            subtitleConfigurations: List<MediaItem.SubtitleConfiguration>,
+        ): Tracks.Group {
             val trackType = MPVTrackType.entries.first { it.type == json.optString("type") }
+            val label = json.optNullableString("title")
+            val language = json.optNullableString("lang")
+            val externalSubtitle = if (trackType == MPVTrackType.SUBTITLE && json.optBoolean("external")) {
+                subtitleConfigurations.firstOrNull { configuration ->
+                    configuration.label == label &&
+                        configuration.language.orEmpty() == language.orEmpty()
+                }
+            } else {
+                null
+            }
+            var selectionFlags = 0
+            if (json.optBoolean("default") ||
+                (externalSubtitle?.selectionFlags?.and(C.SELECTION_FLAG_DEFAULT) ?: 0) != 0
+            ) {
+                selectionFlags = selectionFlags or C.SELECTION_FLAG_DEFAULT
+            }
+            if (json.optBoolean("forced") ||
+                (externalSubtitle?.selectionFlags?.and(C.SELECTION_FLAG_FORCED) ?: 0) != 0
+            ) {
+                selectionFlags = selectionFlags or C.SELECTION_FLAG_FORCED
+            }
 
             // Base format shared between video, audio and subtitles
             val baseFormat =
                 Format.Builder()
                     .setId(json.optInt("id"))
-                    .setLabel(json.optNullableString("title"))
-                    .setLanguage(json.optNullableString("lang"))
-                    .setSelectionFlags(
-                        if (json.optBoolean("default")) C.SELECTION_FLAG_DEFAULT else 0
+                    .setLabel(label)
+                    .setLanguage(language)
+                    .setSelectionFlags(selectionFlags)
+                    .setRoleFlags(
+                        if (json.optBoolean("external")) C.ROLE_FLAG_AUXILIARY else 0
                     )
                     .setCodecs(json.optNullableString("codec"))
                     .build()
@@ -1629,14 +1663,20 @@ class MPVPlayer(
             )
         }
 
-        private fun getTracks(trackList: String): Tracks {
+        private fun getTracks(
+            trackList: String,
+            subtitleConfigurations: List<MediaItem.SubtitleConfiguration>,
+        ): Tracks {
             var tracks = Tracks.EMPTY
             val trackGroups = mutableListOf<Tracks.Group>()
             try {
                 val currentTrackList = JSONArray(trackList)
                 for (index in 0 until currentTrackList.length()) {
                     val tracksGroup =
-                        createTracksGroupfromMpvJson(currentTrackList.getJSONObject(index))
+                        createTracksGroupfromMpvJson(
+                            currentTrackList.getJSONObject(index),
+                            subtitleConfigurations,
+                        )
                     trackGroups.add(tracksGroup)
                 }
                 if (trackGroups.isNotEmpty()) {
