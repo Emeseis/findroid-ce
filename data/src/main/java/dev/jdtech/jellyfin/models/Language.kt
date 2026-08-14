@@ -1,5 +1,6 @@
 package dev.jdtech.jellyfin.models
 
+import java.text.Normalizer
 import java.util.Locale
 
 fun languageTagsMatch(first: String?, second: String?): Boolean {
@@ -71,30 +72,61 @@ fun compactSubtitleDisplayName(
     isForced: Boolean,
     forcedLabel: String,
 ): String? {
-    val titleWithoutForcedMarker = title
-        ?.split(Regex("\\s+(?:—|-)\\s+"))
-        ?.filterNot { component ->
-            component.trim().trim('(', ')', '[', ']').let { marker ->
-                marker.equals("forced", ignoreCase = true) ||
-                    marker.equals("forçado", ignoreCase = true) ||
-                    marker.equals("forçada", ignoreCase = true) ||
-                    marker.equals(forcedLabel, ignoreCase = true)
+    val titleWithoutForcedMarker = if (isForced) {
+        title
+            ?.split(Regex("\\s+(?:—|-)\\s+"))
+            ?.filterNot { component ->
+                isForcedMarker(component, forcedLabel)
             }
-        }
-        ?.joinToString(" - ")
+            ?.joinToString(" - ")
+    } else {
+        title
+    }
 
     val base = compactTrackDisplayName(languageTag, titleWithoutForcedMarker)
     return if (isForced && base != null) "$base ($forcedLabel)" else base
+}
+
+/**
+ * Matches Jellyfin's universal marker and localized grammatical variants without
+ * hard-coding a particular language (for example, masculine/feminine suffixes).
+ */
+private fun isForcedMarker(component: String, forcedLabel: String): Boolean {
+    val marker = normalizeMarker(component)
+    val localizedMarker = normalizeMarker(forcedLabel)
+    if (marker == "forced" || marker == localizedMarker) return true
+    if (marker.length < 4 || localizedMarker.length < 4) return false
+
+    val commonPrefixLength = marker.zip(localizedMarker)
+        .takeWhile { (first, second) -> first == second }
+        .size
+    val shortestLength = minOf(marker.length, localizedMarker.length)
+    val maximumSuffixVariation = maxOf(1, shortestLength / 3)
+
+    return commonPrefixLength >= shortestLength - maximumSuffixVariation &&
+        kotlin.math.abs(marker.length - localizedMarker.length) <= maximumSuffixVariation
+}
+
+private fun normalizeMarker(value: String): String = Normalizer
+    .normalize(value.trim().trim('(', ')', '[', ']'), Normalizer.Form.NFD)
+    .replace(Regex("\\p{M}+"), "")
+    .lowercase(Locale.ROOT)
+
+// Cached mapping from ISO 639-2/T (three-letter) language codes to the two-letter Locale.
+// Locale.getAvailableLocales() scans ~800 entries; computing it once avoids O(n) work per
+// track lookup inside languageLocale().
+private val iso3ToLocale: Map<String, Locale> by lazy {
+    Locale.getAvailableLocales()
+        .filter { it.language.length == 2 }
+        .mapNotNull { locale ->
+            runCatching { locale.isO3Language.lowercase(Locale.ROOT) to locale }.getOrNull()
+        }
+        .toMap()
 }
 
 private fun languageLocale(languageTag: String): Locale {
     val locale = Locale.forLanguageTag(languageTag)
     val language = languageTag.substringBefore('-')
     if (language.length != 3) return locale
-
-    return Locale.getAvailableLocales().firstOrNull { candidate ->
-        candidate.language.length == 2 &&
-            runCatching { candidate.isO3Language.equals(language, ignoreCase = true) }
-                .getOrDefault(false)
-    } ?: locale
+    return iso3ToLocale[language.lowercase(Locale.ROOT)] ?: locale
 }

@@ -29,7 +29,6 @@ import dev.jdtech.jellyfin.models.MediaSegmentAction
 import dev.jdtech.jellyfin.player.core.domain.models.PlayerChapter
 import dev.jdtech.jellyfin.player.core.domain.models.PlayerItem
 import dev.jdtech.jellyfin.player.core.domain.models.PreferenceTrack
-import dev.jdtech.jellyfin.models.languageTagsMatch
 import dev.jdtech.jellyfin.player.core.domain.models.Trickplay
 import dev.jdtech.jellyfin.player.local.R
 import dev.jdtech.jellyfin.player.local.domain.PlaylistManager
@@ -57,6 +56,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.jellyfin.sdk.model.api.BaseItemKind
 import timber.log.Timber
 
@@ -110,6 +110,7 @@ constructor(
     private var items: MutableList<PlayerItem> = mutableListOf()
     private var lastAppliedPreferenceMediaId: String? = null
     private var lastPreferenceWriteJob: Job? = null
+    private var applyPreferenceJob: Job? = null
 
     private val trackSelector = DefaultTrackSelector(application)
     var playWhenReady = true
@@ -759,6 +760,8 @@ constructor(
     ): Tracks.Group? {
         if (preference.audioLanguage == null && preference.audioTitle == null) return null
 
+        // Step 1: resolve to a canonical server-side track so the score-based matcher can
+        // use rich metadata (codec, channelCount) when available.
         val canonicalTrack = TrackPreferenceMatcher.findCanonicalTrack(
             tracks = canonicalTracks,
             streamIndex = preference.audioIndex,
@@ -774,37 +777,19 @@ constructor(
             if (playerIndex != null) return audioGroups[playerIndex]
         }
 
-        val targetLang = preference.audioLanguage?.takeIf { it.isNotBlank() }
-        val targetTitle = preference.audioTitle?.takeIf { it.isNotBlank() }
-
-        // Priority 1: Language + Title
-        if (targetLang != null && targetTitle != null) {
-            val match = audioGroups.find { group ->
-                val format = group.mediaTrackGroup.getFormat(0)
-                languageTagsMatch(format.language, targetLang) && format.label?.equals(targetTitle, ignoreCase = true) == true
-            }
-            if (match != null) return match
-        }
-
-        // Priority 2: Language only
-        if (targetLang != null) {
-            val match = audioGroups.find { group ->
-                val format = group.mediaTrackGroup.getFormat(0)
-                languageTagsMatch(format.language, targetLang)
-            }
-            if (match != null) return match
-        }
-
-        // Priority 3: Title only
-        if (targetTitle != null) {
-            val match = audioGroups.find { group ->
-                val format = group.mediaTrackGroup.getFormat(0)
-                format.label?.equals(targetTitle, ignoreCase = true) == true
-            }
-            if (match != null) return match
-        }
-
-        return null
+        // Step 2: no canonical metadata available (e.g. item not in our playlist). Build a
+        // synthetic PreferenceTrack from stored preference fields and let TrackPreferenceMatcher
+        // score the player tracks directly — avoids duplicating the priority cascade here.
+        val synthetic = PreferenceTrack(
+            index = null,
+            title = preference.audioTitle,
+            language = preference.audioLanguage,
+        )
+        val playerIndex = TrackPreferenceMatcher.findPlayerTrackIndex(
+            target = synthetic,
+            tracks = audioGroups.map { it.toPlayerTrackDescriptor() },
+        )
+        return if (playerIndex != null) audioGroups[playerIndex] else null
     }
 
     private fun findBestSubtitleTrackMatch(
@@ -822,6 +807,8 @@ constructor(
         val targetLang = preference.subtitleLanguage?.takeIf { it.isNotBlank() }
         val targetTitle = preference.subtitleTitle?.takeIf { it.isNotBlank() }
         val targetForced = preference.subtitleIsForced
+
+        // Step 1: resolve to a canonical server-side track.
         val canonicalTrack = TrackPreferenceMatcher.findCanonicalTrack(
             tracks = canonicalTracks,
             streamIndex = if (isEpisode) null else preference.subtitleIndex,
@@ -837,68 +824,19 @@ constructor(
             if (playerIndex != null) return textGroups[playerIndex]
         }
 
-        fun isFormatForced(format: Format): Boolean {
-            return (format.selectionFlags and C.SELECTION_FLAG_FORCED) != 0 ||
-                    (format.label?.contains("forced", ignoreCase = true) == true)
-        }
-
-        // Priority 1: Language + Title + Forced
-        if (targetLang != null && targetTitle != null && targetForced != null) {
-            val match = textGroups.find { group ->
-                val format = group.mediaTrackGroup.getFormat(0)
-                languageTagsMatch(format.language, targetLang) &&
-                        format.label?.equals(targetTitle, ignoreCase = true) == true &&
-                        isFormatForced(format) == targetForced
-            }
-            if (match != null) return match
-        }
-
-        // Priority 2: Language + Forced
-        if (targetLang != null && targetForced != null) {
-            val match = textGroups.find { group ->
-                val format = group.mediaTrackGroup.getFormat(0)
-                languageTagsMatch(format.language, targetLang) && isFormatForced(format) == targetForced
-            }
-            if (match != null) return match
-        }
-
-        // Priority 3: Language + Title
-        if (targetLang != null && targetTitle != null) {
-            val match = textGroups.find { group ->
-                val format = group.mediaTrackGroup.getFormat(0)
-                languageTagsMatch(format.language, targetLang) && format.label?.equals(targetTitle, ignoreCase = true) == true
-            }
-            if (match != null) return match
-        }
-
-        // Priority 4: Language only
-        if (targetLang != null) {
-            val match = textGroups.find { group ->
-                val format = group.mediaTrackGroup.getFormat(0)
-                languageTagsMatch(format.language, targetLang)
-            }
-            if (match != null) return match
-        }
-
-        // Priority 4.5: Title + Forced
-        if (targetTitle != null && targetForced != null) {
-            val match = textGroups.find { group ->
-                val format = group.mediaTrackGroup.getFormat(0)
-                format.label?.equals(targetTitle, ignoreCase = true) == true && isFormatForced(format) == targetForced
-            }
-            if (match != null) return match
-        }
-
-        // Priority 5: Title only
-        if (targetTitle != null) {
-            val match = textGroups.find { group ->
-                val format = group.mediaTrackGroup.getFormat(0)
-                format.label?.equals(targetTitle, ignoreCase = true) == true
-            }
-            if (match != null) return match
-        }
-
-        return null
+        // Step 2: fallback — build a synthetic PreferenceTrack from stored preference fields
+        // and let TrackPreferenceMatcher score the player tracks, avoiding a duplicated cascade.
+        val synthetic = PreferenceTrack(
+            index = null,
+            title = targetTitle,
+            language = targetLang,
+            isForced = targetForced ?: false,
+        )
+        val playerIndex = TrackPreferenceMatcher.findPlayerTrackIndex(
+            target = synthetic,
+            tracks = textGroups.map { it.toPlayerTrackDescriptor() },
+        )
+        return if (playerIndex != null) textGroups[playerIndex] else null
     }
 
     private fun Tracks.Group.toPlayerTrackDescriptor(): PlayerTrackDescriptor {
@@ -907,7 +845,7 @@ constructor(
             title = format.label,
             language = format.language,
             isForced = (format.selectionFlags and C.SELECTION_FLAG_FORCED) != 0 ||
-                format.label?.contains("forced", ignoreCase = true) == true,
+                format.label?.contains(FORCED_WORD_BOUNDARY_REGEX) == true,
             isExternal = (format.roleFlags and C.ROLE_FLAG_AUXILIARY) != 0,
             codec = format.codecs,
             channelCount = format.channelCount.takeIf { it != Format.NO_VALUE },
@@ -916,13 +854,15 @@ constructor(
 
     override fun onTracksChanged(tracks: Tracks) {
         super.onTracksChanged(tracks)
-        viewModelScope.launch {
+        applyPreferenceJob?.cancel()
+        applyPreferenceJob = viewModelScope.launch {
             val mediaId = player.currentMediaItem?.mediaId ?: return@launch
             if (lastAppliedPreferenceMediaId == mediaId) return@launch
 
             val itemId = try { UUID.fromString(mediaId) } catch (e: Exception) { return@launch }
             val currentItem = items.find { it.itemId == itemId }
             val groupingId = currentItem?.groupingId ?: getGroupingId(itemId)
+
             val isEpisode = currentItem?.isEpisode ?: (groupingId != itemId)
             val preference = repository.getItemPreference(groupingId) ?: run {
                 lastAppliedPreferenceMediaId = mediaId
@@ -960,8 +900,9 @@ constructor(
                     isEpisode = isEpisode,
                 )
                 if (bestSubtitle == null) {
-                    // External subtitles are added asynchronously by MPV. Keep listening for
-                    // track changes until the requested track is actually available.
+                    // MPV adds external subtitles asynchronously. Leave this item unresolved so
+                    // a later track event can apply the preference when the track becomes visible.
+                    // No active retry loop is needed: onTracksChanged is driven by player events.
                     preferenceResolved = false
                 } else if (!bestSubtitle.isSelected) {
                     parametersBuilder.setOverrideForType(TrackSelectionOverride(bestSubtitle.mediaTrackGroup, 0))
@@ -1054,7 +995,7 @@ constructor(
     }
 
     suspend fun awaitPendingPreferenceWrites() {
-        lastPreferenceWriteJob?.join()
+        withTimeoutOrNull(PREFERENCE_WRITE_TIMEOUT_MS) { lastPreferenceWriteJob?.join() }
     }
 
     private suspend fun getGroupingId(itemId: UUID): UUID {
@@ -1337,3 +1278,9 @@ sealed interface PlayerEvents {
 
     data class PlayerError(val error: PlaybackException) : PlayerEvents
 }
+
+// The Activity must not wait indefinitely while closing. Preference writes themselves remain
+// strictly serialized and continue in their NonCancellable jobs after this timeout.
+private const val PREFERENCE_WRITE_TIMEOUT_MS = 3_000L
+
+private val FORCED_WORD_BOUNDARY_REGEX = Regex("\\bforced\\b", RegexOption.IGNORE_CASE)

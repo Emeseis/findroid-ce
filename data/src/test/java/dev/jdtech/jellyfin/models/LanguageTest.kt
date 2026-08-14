@@ -58,4 +58,39 @@ class LanguageTest {
             Locale.setDefault(previousLocale)
         }
     }
+
+    @Test
+    fun `recognizes localized grammatical variants of forced marker`() {
+        assertEquals(
+            "Español - ASS (Forzada)",
+            compactSubtitleDisplayName(
+                languageTag = "spa",
+                title = "Español - Forzado - ASS",
+                isForced = true,
+                forcedLabel = "Forzada",
+            )
+        )
+        assertEquals(
+            "Français - ASS (Forcée)",
+            compactSubtitleDisplayName(
+                languageTag = "fra",
+                title = "Français - Forcé - ASS",
+                isForced = true,
+                forcedLabel = "Forcée",
+            )
+        )
+    }
+
+    @Test
+    fun `does not remove metadata from a non forced subtitle`() {
+        assertEquals(
+            "English - Commentary - SUBRIP",
+            compactSubtitleDisplayName(
+                languageTag = "eng",
+                title = "English - Commentary - SUBRIP",
+                isForced = false,
+                forcedLabel = "Forced",
+            )
+        )
+    }
 }

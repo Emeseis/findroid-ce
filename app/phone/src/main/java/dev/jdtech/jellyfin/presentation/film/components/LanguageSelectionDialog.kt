@@ -27,8 +27,8 @@ import androidx.compose.ui.unit.dp
 import dev.jdtech.jellyfin.core.R as CoreR
 import dev.jdtech.jellyfin.models.FindroidMediaStream
 import dev.jdtech.jellyfin.models.ItemPreferenceDto
-import dev.jdtech.jellyfin.models.compactTrackDisplayName
 import dev.jdtech.jellyfin.models.compactSubtitleDisplayName
+import dev.jdtech.jellyfin.models.compactTrackDisplayName
 import dev.jdtech.jellyfin.presentation.theme.spacings
 
 @Composable
@@ -73,11 +73,14 @@ fun LanguageSelectionDialog(
                 }
                 items(availableAudio, key = { it.index ?: it.hashCode() }) { stream ->
                     val streamTitle = stream.displayTitle?.takeIf { it.isNotBlank() } ?: stream.title
-                    val isSelected = if (!isSeries && selectedAudioIndex != null && stream.index != null) {
-                        selectedAudioIndex == stream.index
-                    } else {
-                        selectedAudioLanguage == stream.language && (selectedAudioTitle == streamTitle || selectedAudioTitle == stream.title || (selectedAudioTitle.isNullOrBlank() && streamTitle.isBlank()))
-                    }
+                    val isSelected = isAudioStreamSelected(
+                        stream = stream,
+                        streamTitle = streamTitle,
+                        isSeries = isSeries,
+                        selectedIndex = selectedAudioIndex,
+                        selectedLanguage = selectedAudioLanguage,
+                        selectedTitle = selectedAudioTitle,
+                    )
                     LanguageOption(
                         title = compactTrackDisplayName(stream.language, streamTitle).orEmpty(),
                         isSelected = isSelected,
@@ -123,13 +126,15 @@ fun LanguageSelectionDialog(
                 }
                 items(availableSubtitles, key = { it.index ?: it.hashCode() }) { stream ->
                     val streamTitle = stream.displayTitle?.takeIf { it.isNotBlank() } ?: stream.title
-                    val isSelected = !subtitleNoneSelected && if (!isSeries && selectedSubtitleIndex != null && stream.index != null) {
-                        selectedSubtitleIndex == stream.index
-                    } else {
-                        selectedSubtitleLanguage == stream.language &&
-                                (selectedSubtitleTitle == streamTitle || selectedSubtitleTitle == stream.title || (selectedSubtitleTitle.isNullOrBlank() && streamTitle.isBlank())) &&
-                                (selectedSubtitleIsForced == null || stream.isForced == selectedSubtitleIsForced)
-                    }
+                    val isSelected = !subtitleNoneSelected && isSubtitleStreamSelected(
+                        stream = stream,
+                        streamTitle = streamTitle,
+                        isSeries = isSeries,
+                        selectedIndex = selectedSubtitleIndex,
+                        selectedLanguage = selectedSubtitleLanguage,
+                        selectedTitle = selectedSubtitleTitle,
+                        selectedIsForced = selectedSubtitleIsForced,
+                    )
                     val forcedTag = stringResource(CoreR.string.forced_tag)
                     val displayTitle = compactSubtitleDisplayName(
                         languageTag = stream.language,
@@ -178,6 +183,56 @@ fun LanguageSelectionDialog(
             }
         }
     )
+}
+
+/**
+ * Returns true when [stream] matches the currently selected audio state.
+ *
+ * When an explicit stream index is stored and the context is not a series, the
+ * index is used directly. Otherwise, language + title are compared so the
+ * selection survives across episodes where stream indices differ.
+ */
+private fun isAudioStreamSelected(
+    stream: FindroidMediaStream,
+    streamTitle: String?,
+    isSeries: Boolean,
+    selectedIndex: Int?,
+    selectedLanguage: String?,
+    selectedTitle: String?,
+): Boolean {
+    if (!isSeries && selectedIndex != null && stream.index != null) {
+        return selectedIndex == stream.index
+    }
+    return selectedLanguage == stream.language &&
+        (selectedTitle == streamTitle ||
+            selectedTitle == stream.title ||
+            (selectedTitle.isNullOrBlank() && streamTitle.isNullOrBlank()))
+}
+
+/**
+ * Returns true when [stream] matches the currently selected subtitle state.
+ *
+ * Same index-vs-metadata strategy as [isAudioStreamSelected], with the additional
+ * [selectedIsForced] dimension for distinguishing forced from full subtitles of
+ * the same language.
+ */
+private fun isSubtitleStreamSelected(
+    stream: FindroidMediaStream,
+    streamTitle: String?,
+    isSeries: Boolean,
+    selectedIndex: Int?,
+    selectedLanguage: String?,
+    selectedTitle: String?,
+    selectedIsForced: Boolean?,
+): Boolean {
+    if (!isSeries && selectedIndex != null && stream.index != null) {
+        return selectedIndex == stream.index
+    }
+    return selectedLanguage == stream.language &&
+        (selectedTitle == streamTitle ||
+            selectedTitle == stream.title ||
+            (selectedTitle.isNullOrBlank() && streamTitle.isNullOrBlank())) &&
+        (selectedIsForced == null || stream.isForced == selectedIsForced)
 }
 
 @Composable
